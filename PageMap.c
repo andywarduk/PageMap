@@ -700,6 +700,7 @@ void printcmdline(uint64_t pid, int width)
 	}
 	if(!ok){
 		printf("<Unknown>");
-	}	
+	}
+	free(buf);
 }
 
