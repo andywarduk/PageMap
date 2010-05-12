@@ -153,7 +153,7 @@ int dumpall()
 	int nent;
 	int loop;
 	uint64_t pid;
-	bool needhdg;
+	bool needhdg = true;
 	int printed = 0;
 	
 	do{

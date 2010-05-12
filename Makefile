@@ -7,10 +7,10 @@ PageMap64: PageMap64.o
 	g++ -m64 -Wall -Wextra $^ -o $@
 	
 %32.o: %.c
-	g++ -c $^ -m32 -Wall -Wextra -fPIC -fno-inline -g -o $@
+	g++ -c $^ -m32 -Wall -Wextra -fPIC -fno-inline -g -O2 -o $@
 
 %64.o: %.c
-	g++ -c $^ -m64 -Wall -Wextra -fPIC -fno-inline -g -o $@
+	g++ -c $^ -m64 -Wall -Wextra -fPIC -fno-inline -g -O2 -o $@
 	
 clean:
 	rm -f *.o *.so *~ core.* PageMap32 PageMap64
