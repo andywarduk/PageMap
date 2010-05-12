@@ -166,8 +166,8 @@ int initialise(struct global *globals)
 
 void cleanup(struct global *globals)
 {
-	if(globals->hkpagecount) close(globals->hkpagecount);
-	if(globals->hkpageflags) close(globals->hkpageflags);
+	if(globals->hkpagecount >= 0) close(globals->hkpagecount);
+	if(globals->hkpageflags >= 0) close(globals->hkpageflags);
 }
 
 int dumpall_filter(const struct dirent *entry)
@@ -327,8 +327,8 @@ int dumppid(struct global *globals)
 			printf("%10" UINT64FMT "u", globals->pid);
 		}
 
-		line=NULL;
-		linesize=0;
+		line = NULL;
+		linesize = 0;
 		while(1){
 			if(getline(&line, &linesize, hmaps) == -1) break;
 			linelen = strlen(line);
@@ -457,7 +457,8 @@ int dumppid(struct global *globals)
 				if(skip) clearstats(&stats);
 				else dumpstats(globals, &stats);
 			}
-		}	
+		}
+		if(line) free(line);
 
 		if(!globals->summary && !globals->map){
 			if(!globals->list){
