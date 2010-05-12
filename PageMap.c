@@ -1,4 +1,5 @@
 #define __STDC_LIMIT_MACROS
+#define _LARGEFILE64_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,12 @@ struct sstats{
 	uint64_t anon;
 	uint64_t swapped;
 };
+
+#if __WORDSIZE == 64
+#define UINT64FMT "l"
+#else
+#define UINT64FMT "ll"
+#endif
 
 void usage();
 void printsize(uint64_t size);
@@ -214,7 +221,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 
 	do{	
 		// Open page mapping
-		sprintf(path, "/proc/%lu/pagemap", pid);
+		sprintf(path, "/proc/%" UINT64FMT "u/pagemap", pid);
 		hpagemap = open(path, O_RDONLY);
 		if(hpagemap == -1){
 			if(!list){
@@ -225,7 +232,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 		}
 
 		// Open maps
-		sprintf(path, "/proc/%lu/maps", pid);
+		sprintf(path, "/proc/%" UINT64FMT "u/maps", pid);
 		hmaps = fopen(path, "r");
 		if(hmaps == NULL){
 			if(!list){
@@ -243,7 +250,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 		clearstats(&stats);
 
 		if(list){
-			printf("%10lu", pid);
+			printf("%10" UINT64FMT "u", pid);
 		}
 
 		line=NULL;
@@ -284,7 +291,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 			}
 			stats.size += range[1]-range[0];
 			
-			lseek(hpagemap, (range[0]/4096)*sizeof(uint64_t), SEEK_SET);
+			lseek64(hpagemap, (range[0]/4096)*sizeof(uint64_t), SEEK_SET);
 			offset = range[0];
 			npstart = UINT64_MAX;
 			while(offset<range[1]){
@@ -292,9 +299,9 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 				if(b <= 0) break;
 
 				// Unpack common bits
-				present = (entry & 0x8000000000000000) >> 62;
-				swapped = (entry & 0x4000000000000000) >> 61;
-				shift = (entry & 0x1f80000000000000) >> 55;
+				present = (entry & 0x8000000000000000LL) >> 62;
+				swapped = (entry & 0x4000000000000000LL) >> 61;
+				shift = (entry & 0x1f80000000000000LL) >> 55;
 				pagesize = (1<<shift);
 				
 				if(!present && !swapped){
@@ -309,7 +316,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 
 					if(verbose && !skip){
 						// Print page range
-						printf("   %016lx-%016lx ", offset, offset+pagesize-1);
+						printf("   %016" UINT64FMT "x-%016" UINT64FMT "x ", offset, offset+pagesize-1);
 						printsize(pagesize);
 					}
 					if(present){
@@ -317,18 +324,18 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 						stats.present += pagesize;
 						
 						// Get PFN
-						pfn = entry & 0x07fffffffffffff;
+						pfn = entry & 0x07fffffffffffffLL;
 						if(verbose && !skip){
-							printf(", Present (pfn %016lx)", pfn);
+							printf(", Present (pfn %016" UINT64FMT "x)", pfn);
 						}
 						if(map && !skip) printf("P");
 						if(hkpagecount >= 0){
 							// Get page reference count if we can
-							lseek(hkpagecount, pfn*sizeof(uint64_t), SEEK_SET);						
+							lseek64(hkpagecount, pfn*sizeof(uint64_t), SEEK_SET);						
 							b = read(hkpagecount, &pagecnt, sizeof(uint64_t));
 							if(b == sizeof(uint64_t)){
 								if(verbose && !skip){
-									printf(", RefCnt %lu", pagecnt);
+									printf(", RefCnt %" UINT64FMT "u", pagecnt);
 								}
 								if(pagecnt <= 1) stats.priv += pagesize;
 								if(pagecnt >= 1) stats.privavg += (pagesize<<8) / pagecnt;
@@ -336,7 +343,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 						}
 						if(hkpageflags >= 0){
 							// Get page flags if we can
-							lseek(hkpageflags, pfn*sizeof(uint64_t), SEEK_SET);						
+							lseek64(hkpageflags, pfn*sizeof(uint64_t), SEEK_SET);						
 							b = read(hkpageflags, &pageflags, sizeof(uint64_t));
 							if(b == sizeof(uint64_t)){
 								if(verbose && !skip){
@@ -353,10 +360,10 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 							stats.swapped += pagesize;
 							if(map && !skip) printf("S");
 						}
-						swapfile = entry & 0x000000000000001f;
-						swapoff = (entry & 0x07fffffffffffe0) >> 5;
+						swapfile = entry & 0x000000000000001fLL;
+						swapoff = (entry & 0x07fffffffffffe0LL) >> 5;
 						if(verbose && !skip){
-							printf(", Swapped (seg %u offs %016lx)", (unsigned int) swapfile, swapoff);
+							printf(", Swapped (seg %u offs %016" UINT64FMT "x)", (unsigned int) swapfile, swapoff);
 						}
 					}
 					
@@ -393,7 +400,7 @@ int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, b
 void dumpstats(struct sstats *stats, bool title, bool list)
 {
 	if(list){
-		printf(" %8lu %8lu %8lu %8lu %8lu %8lu",
+		printf(" %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u",
 			stats->size / 1024, stats->present / 1024, stats->priv / 1024, (stats->privavg>>8) / 1024,
 			stats->anon / 1024, stats->swapped / 1024);
 	}
@@ -401,16 +408,16 @@ void dumpstats(struct sstats *stats, bool title, bool list)
 		if(title){
 			printf("============ Totals ============\n");
 		}
-		printf("Size:      %8lu kB\n", stats->size / 1024);
-		printf("Present:   %8lu kB (%.1f%%)\n", stats->present / 1024, ((double)stats->present/(double)stats->size)*100.0);
+		printf("Size:      %8" UINT64FMT "u kB\n", stats->size / 1024);
+		printf("Present:   %8" UINT64FMT "u kB (%.1f%%)\n", stats->present / 1024, ((double)stats->present/(double)stats->size)*100.0);
 		if(stats->priv){
-		printf("  Unique:  %8lu kB (%.1f%%)\n", stats->priv / 1024, ((double)stats->priv/(double)stats->present)*100.0);
-		printf("  Average: %8lu kB (%.1f%%)\n", (stats->privavg>>8) / 1024, ((double)(stats->privavg>>8)/(double)stats->present)*100.0);
+		printf("  Unique:  %8" UINT64FMT "u kB (%.1f%%)\n", stats->priv / 1024, ((double)stats->priv/(double)stats->present)*100.0);
+		printf("  Average: %8" UINT64FMT "u kB (%.1f%%)\n", (stats->privavg>>8) / 1024, ((double)(stats->privavg>>8)/(double)stats->present)*100.0);
 		}
 		if(stats->anon){
-		printf("  Anon:    %8lu kB (%.1f%%)\n", stats->anon / 1024, ((double)stats->anon/(double)stats->present)*100.0);
+		printf("  Anon:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->anon / 1024, ((double)stats->anon/(double)stats->present)*100.0);
 		}
-		printf("Swapped:   %8lu kB (%.1f%%)\n", stats->swapped / 1024, ((double)stats->swapped/(double)stats->size)*100.0);	
+		printf("Swapped:   %8" UINT64FMT "u kB (%.1f%%)\n", stats->swapped / 1024, ((double)stats->swapped/(double)stats->size)*100.0);	
 	}
 	
 	clearstats(stats);
@@ -472,7 +479,7 @@ void printsize(uint64_t size)
 		break;
 	}
 	
-	printf("[%4lu%2s]",size,unit);
+	printf("[%4" UINT64FMT "u%2s]",size,unit);
 }
 
 void dumpflags(uint64_t flags)
@@ -572,7 +579,7 @@ void flushnp(uint64_t *npstart, uint64_t offset, bool verbose, bool skip)
 {
 	if(*npstart != UINT64_MAX){
 		if(verbose && !skip){
-			printf("   %016lx-%016lx ", *npstart, offset-1);
+			printf("   %016" UINT64FMT "x-%016" UINT64FMT "x ", *npstart, offset-1);
 			printsize(offset-*npstart);
 			printf(", Not present\n");
 		}
@@ -591,7 +598,7 @@ void printcmdline(uint64_t pid)
 	int b;
 	int loop;
 	
-	sprintf(path, "/proc/%lu/cmdline", pid);
+	sprintf(path, "/proc/%" UINT64FMT "u/cmdline", pid);
 	hcmdline = open(path, O_RDONLY);
 	if(hcmdline>=0){
 		do{
