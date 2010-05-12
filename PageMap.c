@@ -1,19 +1,23 @@
+#define __STDC_LIMIT_MACROS
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#define __STDC_LIMIT_MACROS
 #include <limits.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <string.h>
+#include <dirent.h>
+#include <ctype.h>
 
 struct sstats{
 	uint64_t size;
 	uint64_t present;
 	uint64_t priv;
+	uint64_t privavg;
 	uint64_t anon;
 	uint64_t swapped;
 };
@@ -22,9 +26,11 @@ void usage();
 void printsize(uint64_t size);
 void dumpflags(uint64_t flags);
 void flushnp(uint64_t *npstart, uint64_t offset, bool verbose, bool skip);
-int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writable);
-void dumpstats(struct sstats *stats, bool title);
+int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, bool list);
+int dumpall();
+void dumpstats(struct sstats *stats, bool title, bool list);
 void clearstats(struct sstats *stats);
+void printcmdline(uint64_t pid);
 
 int main(int argc, char **argv)
 {
@@ -34,9 +40,11 @@ int main(int argc, char **argv)
 	bool map = false;
 	bool writable = false;
 	char *end;
-	unsigned long pid;
+	unsigned long pid = 0;
+	bool gotpid = false;
 
-	while((opt = getopt(argc, argv, "vmsw")) != -1){
+	// Parse arguments
+	while((opt = getopt(argc, argv, "vmswp:")) != -1){
 		switch (opt) {
 		case 'v':
 			verbose = true;
@@ -50,37 +58,134 @@ int main(int argc, char **argv)
 		case 'w':
 			writable = true;
 			break;
+		case 'p':
+			if(gotpid){
+				usage();
+				return 5;
+			}
+			if(strcmp(optarg, "self") == 0){
+				pid = getpid();
+				gotpid = true;
+			}
+			else{
+				// Get pid
+				errno = 0;
+				pid = strtoull(optarg, &end, 10);
+				if(errno != 0 || *end != '\x0'){
+					usage();
+					return 3;
+				}
+			}
+			gotpid = true;
+			break;
 		default:
 			usage(); 
 			return 1;
 		}
 	}
 
-	if(verbose && map) return 4;
-
-	if(optind != argc-1){
+	if(optind != argc){
 		usage();
 		return 2;
 	}
-	
-	// Get pid
-	pid = strtoul(*(argv+optind), &end, 10);
-	if(errno != 0 || *end != '\x0'){
-		usage();
-		return 3;
+
+	if(gotpid){
+		if(verbose && map) return 4;
+	}
+	else{
+		if(verbose || map || summary || writable){
+			usage();
+			return 6;
+		}
 	}
 	
-	return dumppid(pid, summary, verbose, map, writable);
+	if(gotpid)
+		return dumppid(pid, summary, verbose, map, writable, false);
+	else
+		return dumpall();
 }
 
-int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writable)
+int dumpall_filter(const struct dirent *entry)
+{
+	int result = 1;
+	const char *ch;
+	
+	if(entry->d_type != DT_DIR){
+		result = 0;
+	}
+	else{
+		result = 0;
+		for(ch = entry->d_name; *ch != '\x0'; ch++){
+			if(isdigit(*ch)) result = 1;
+			else{
+				result = 0;
+				break;
+			}
+		}
+	}
+	
+	return result;
+}
+
+int dumpall_cmp(const struct dirent **one, const struct dirent **two)
+{
+	uint64_t pidone;
+	uint64_t pidtwo;
+	
+	pidone = strtoull((*one)->d_name, NULL, 10);
+	pidtwo = strtoull((*two)->d_name, NULL, 10);
+	if(pidone < pidtwo) return -1;
+	if(pidone == pidtwo) return 0;
+	return 1;
+}
+
+int dumpall()
+{
+	int result;
+	struct dirent **entries;
+	int nent;
+	int loop;
+	uint64_t pid;
+	bool needhdg;
+	int printed = 0;
+	
+	do{
+		nent = scandir("/proc", &entries, dumpall_filter, dumpall_cmp);
+		if(nent < 0){
+			printf("Error scanning /proc\n");
+			result = 20;
+			break;	
+		}
+
+		for(loop=0; loop<nent; loop++){
+			if(needhdg){
+				//      xxxxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx ....
+				printf("====== PID     Size  Present  Private  Average     Anon  Swapped Process ======\n");
+				needhdg = false;
+			}
+			pid = strtoull(entries[loop]->d_name, NULL, 10);
+			if(pid > 0 && dumppid(pid, false, false, false, false, true) == 0){
+				printf(" ");
+				printcmdline(pid);
+				printf("\n");
+				if(++printed % 40 == 0) needhdg = true;
+			}
+			free(entries[loop]);
+		}	
+		free(entries);
+	} while(0);
+	
+	return result;
+}
+
+int dumppid(uint64_t pid, bool summary, bool verbose, bool map, bool writable, bool list)
 {
 	int result = 0;
 	
 	bool skip;
 	char *end;
 	char path[PATH_MAX+1];
-	FILE *hmaps;
+	FILE *hmaps = NULL;
 	char *line;
 	size_t linesize;
 	int linelen;
@@ -88,7 +193,7 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 	const char *item;
 	char *perms;
 
-	int hpagemap;
+	int hpagemap = 0;
 	int b;
 	uint64_t entry;
 	uint64_t npstart;
@@ -100,9 +205,9 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 	unsigned int shift;
 	unsigned int pagesize;
 
-	int hkpagecount;
+	int hkpagecount = 0;
 	uint64_t pagecnt;
-	int hkpageflags;
+	int hkpageflags = 0;
 	uint64_t pageflags;
 	
 	struct sstats stats;
@@ -112,7 +217,9 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 		sprintf(path, "/proc/%lu/pagemap", pid);
 		hpagemap = open(path, O_RDONLY);
 		if(hpagemap == -1){
-			printf("Error opening %s\n", path);
+			if(!list){
+				printf("Error opening %s\n", path);
+			}
 			result = 10;
 			break;
 		}
@@ -121,7 +228,9 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 		sprintf(path, "/proc/%lu/maps", pid);
 		hmaps = fopen(path, "r");
 		if(hmaps == NULL){
-			printf("Error opening %s\n", path);
+			if(!list){
+				printf("Error opening %s\n", path);
+			}
 			result = 11;
 			break;
 		}
@@ -132,6 +241,10 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 
 		// Clear stats
 		clearstats(&stats);
+
+		if(list){
+			printf("%10lu", pid);
+		}
 
 		line=NULL;
 		linesize=0;
@@ -145,11 +258,13 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 			else item = "[Anonymous]";
 
 			// Get range start
+			errno = 0;
 			range[0] = strtoull(line, &end, 16);
 			if(errno != 0) continue;
 
 			// Get range end
 			++end;
+			errno = 0;
 			range[1] = strtoull(end, &end, 16);
 			if(errno != 0) continue;
 
@@ -216,6 +331,7 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 									printf(", RefCnt %lu", pagecnt);
 								}
 								if(pagecnt <= 1) stats.priv += pagesize;
+								if(pagecnt >= 1) stats.privavg += (pagesize<<8) / pagecnt;
 							}
 						}
 						if(hkpageflags >= 0){
@@ -257,32 +373,45 @@ int dumppid(unsigned long pid, bool summary, bool verbose, bool map, bool writab
 			if(map && !skip) printf("\n");			
 			if(summary){
 				if(skip) clearstats(&stats);
-				else dumpstats(&stats, false);
+				else dumpstats(&stats, false, list);
 			}
 		}	
 
 		if(!summary && !map){
-			dumpstats(&stats, verbose);
+			dumpstats(&stats, verbose, list);
 		}
 	} while(0);
-	
+
+	if(hpagemap >= 0) close(hpagemap);
+	if(hmaps != NULL) fclose(hmaps);
+	if(hkpagecount >= 0) close(hkpagecount);
+	if(hkpageflags >= 0) close(hkpageflags);
+		
 	return result;
 }
 
-void dumpstats(struct sstats *stats, bool title)
+void dumpstats(struct sstats *stats, bool title, bool list)
 {
-	if(title){
-		printf("============ Stats ============\n");
+	if(list){
+		printf(" %8lu %8lu %8lu %8lu %8lu %8lu",
+			stats->size / 1024, stats->present / 1024, stats->priv / 1024, (stats->privavg>>8) / 1024,
+			stats->anon / 1024, stats->swapped / 1024);
 	}
-	printf("Size:      %8lu kB\n", stats->size / 1024);
-	printf("Present:   %8lu kB (%.1f%%)\n", stats->present / 1024, ((double)stats->present/(double)stats->size)*100.0);
-	if(stats->priv){
-	printf("  Unique:  %8lu kB (%.1f%%)\n", stats->priv / 1024, ((double)stats->priv/(double)stats->present)*100.0);
+	else{
+		if(title){
+			printf("============ Totals ============\n");
+		}
+		printf("Size:      %8lu kB\n", stats->size / 1024);
+		printf("Present:   %8lu kB (%.1f%%)\n", stats->present / 1024, ((double)stats->present/(double)stats->size)*100.0);
+		if(stats->priv){
+		printf("  Unique:  %8lu kB (%.1f%%)\n", stats->priv / 1024, ((double)stats->priv/(double)stats->present)*100.0);
+		printf("  Average: %8lu kB (%.1f%%)\n", (stats->privavg>>8) / 1024, ((double)(stats->privavg>>8)/(double)stats->present)*100.0);
+		}
+		if(stats->anon){
+		printf("  Anon:    %8lu kB (%.1f%%)\n", stats->anon / 1024, ((double)stats->anon/(double)stats->present)*100.0);
+		}
+		printf("Swapped:   %8lu kB (%.1f%%)\n", stats->swapped / 1024, ((double)stats->swapped/(double)stats->size)*100.0);	
 	}
-	if(stats->anon){
-	printf("  Anon:    %8lu kB (%.1f%%)\n", stats->anon / 1024, ((double)stats->anon/(double)stats->present)*100.0);
-	}
-	printf("Swapped:   %8lu kB (%.1f%%)\n", stats->swapped / 1024, ((double)stats->swapped/(double)stats->size)*100.0);	
 	
 	clearstats(stats);
 }
@@ -292,17 +421,19 @@ void clearstats(struct sstats *stats)
 	stats->size = 0;
 	stats->present = 0;
 	stats->priv = 0;
+	stats->privavg = 0;
 	stats->anon = 0;
 	stats->swapped = 0;
 }
 
 void usage()
 {
-	printf("Usage: PageMap [-v | -m] [-s] [-w] <pid>\n"
-	       "   where: -v  Dump each present / swapped page entry\n"
-	       "          -m  Dump status map of each mapped segment ('P'resent, 'S'wapped or '.' for not present)\n"
-	       "          -s  Print statistics for each mapped section\n"
-	       "          -w  Only process writable sections\n");
+	printf("Usage: PageMap [-p <pid> [-v | -m] [-s] [-w]]\n"
+	       "   where: -p <pid>  Process ID to dump\n"
+	       "          -v        Dump each present / swapped page entry\n"
+	       "          -m        Dump status map of each mapped segment ('P'resent, 'S'wapped or '.' for not present)\n"
+	       "          -s        Print statistics for each mapped section\n"
+	       "          -w        Only process writable sections\n");
 }
 
 void printsize(uint64_t size)
@@ -449,4 +580,34 @@ void flushnp(uint64_t *npstart, uint64_t offset, bool verbose, bool skip)
 	}
 }
 
+#define MAX_CMDLINE 200
 
+void printcmdline(uint64_t pid)
+{
+	bool ok = false;
+	int hcmdline;
+	char path[PATH_MAX];
+	char buf[MAX_CMDLINE], *ch;
+	int b;
+	int loop;
+	
+	sprintf(path, "/proc/%lu/cmdline", pid);
+	hcmdline = open(path, O_RDONLY);
+	if(hcmdline>=0){
+		do{
+			b = read(hcmdline, buf, MAX_CMDLINE);
+			if(b <= 0) break;
+			buf[b-1] = '\x0';
+			for(ch=buf, loop=0; loop<b-1; loop++, ch++){
+				if(*ch == '\x0') *ch = ' ';
+				else if(!isprint(*ch)) *ch = '.';
+			}
+			printf("%s", buf);
+			ok=true;		
+		} while(0);	
+		close(hcmdline);
+	}
+	if(!ok){
+		printf("<Unknown>");
+	}	
+}
