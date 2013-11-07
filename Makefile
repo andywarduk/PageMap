@@ -14,4 +14,6 @@ PageMap64: PageMap64.o
 	
 clean:
 	rm -f *.o *.so *~ core.* PageMap32 PageMap64
-	
+
+install: PageMap32 PageMap64
+	su -c "cp PageMap32 PageMap64 /usr/local/bin && chmod 755 /usr/local/bin/PageMap*"
