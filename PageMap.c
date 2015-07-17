@@ -297,6 +297,14 @@ int dumppid(struct global *globals)
 	
 	struct sstats stats;
 
+	int gotpagecnt;
+	int gotpageflags;
+
+	int incompound = 0;
+	int hdgotpagecnt = 0;
+	uint64_t hdpagecnt = 0;
+	uint64_t hdpageflags = 0	;
+
 	do{	
 		// Open page mapping
 		sprintf(path, "/proc/%" UINT64FMT "u/pagemap", globals->pid);
@@ -403,32 +411,71 @@ int dumppid(struct global *globals)
 							printf(", Present (pfn %016" UINT64FMT "x)", pfn);
 						}
 						if(globals->map && !skip) printf("P");
+
+						gotpagecnt = 0;
 						if(globals->hkpagecount >= 0){
 							// Get page reference count if we can
 							lseek64(globals->hkpagecount, pfn*sizeof(uint64_t), SEEK_SET);						
 							b = read(globals->hkpagecount, &pagecnt, sizeof(uint64_t));
 							if(b == sizeof(uint64_t)){
-								if(globals->verbose && !skip){
-									printf(", RefCnt %" UINT64FMT "u", pagecnt);
-								}
-								if(pagecnt <= 1) stats.priv += pagesize;
-								if(pagecnt >= 1) stats.privavg += (pagesize<<8) / pagecnt;
+								gotpagecnt = 1;
 							}
 						}
+
+						gotpageflags = 0;
 						if(globals->hkpageflags >= 0){
 							// Get page flags if we can
 							lseek64(globals->hkpageflags, pfn*sizeof(uint64_t), SEEK_SET);						
 							b = read(globals->hkpageflags, &pageflags, sizeof(uint64_t));
 							if(b == sizeof(uint64_t)){
-								if(globals->verbose && !skip){
-									printf(", Flags ");
-									dumpflags(pageflags);
-								}
-								if(pageflags & (1<<12)) stats.anon += pagesize;
-								if(pageflags & (1<< 2)) stats.refd += pagesize;
+								gotpageflags = 1;
 							}
 						}
+
+						if(gotpageflags){
+							if(pageflags & (1<<15)){ // Compound head
+								incompound = 1;
+								hdpageflags = pageflags;
+								hdgotpagecnt = gotpagecnt;
+								hdpagecnt = pagecnt;
+							}
+							else if(incompound && pageflags & (1<<16)){ // Compound tail
+								// Use hdpageflags from header
+							}
+							else { // Not compound
+								incompound = 0;
+								hdpageflags = pageflags;
+								hdgotpagecnt = gotpagecnt;
+								hdpagecnt = pagecnt;
+							}
+						}
+						else {
+							incompound = 0;
+							hdgotpagecnt = gotpagecnt;
+							hdpagecnt = pagecnt;
+						}
+
+						if(gotpagecnt){
+							if(globals->verbose && !skip){
+								printf(", RefCnt %" UINT64FMT "u", pagecnt);
+							}
+							if(hdgotpagecnt){
+								if(hdpagecnt <= 1) stats.priv += pagesize;
+								if(hdpagecnt >= 1) stats.privavg += (pagesize<<8) / hdpagecnt;
+							}
+						}
+
+						if(gotpageflags){
+							if(globals->verbose && !skip){
+								printf(", Flags ");
+								dumpflags(pageflags);
+							}
+							if(hdpageflags & (1<<12)) stats.anon += pagesize;
+							if(hdpageflags & (1<< 2)) stats.refd += pagesize;
+						}
+
 					}
+
 					if(swapped){
 						// Page is in swap space
 						if(!present){
@@ -579,6 +626,7 @@ void dumpflags(uint64_t flags)
 			}
 			
 			switch(loop){
+			// Take from Linux/include/uapi/linux/kernel-page-flags.h:
 			case 0:
 				printf("LOCKED");
 				break;
@@ -645,13 +693,54 @@ void dumpflags(uint64_t flags)
 			case 21:
 				printf("KSM");
 				break;
+			case 22:
+				printf("THP");
+				break;
+			case 23:
+				printf("BALLOON");
+				break;
+			case 24:
+				printf("ZERO_PAGE");
+				break;
+
+			// Taken from Linux/include/linux/kernel-page-flags.h (subject to change):
+			case 32:
+				printf("RESERVED?");
+				break;
+			case 33:
+				printf("MLOCKED?");
+				break;
+			case 34:
+				printf("MAPPEDTODISK?");
+				break;
+			case 35:
+				printf("PRIVATE?");
+				break;
+			case 36:
+				printf("PRIVATE_2?");
+				break;
+			case 37:
+				printf("OWNER_PRIVATE?");
+				break;
+			case 38:
+				printf("ARCH?");
+				break;
+			case 39:
+				printf("UNCACHED?");
+				break;
+			case 40:
+				printf("SOFTDIRTY?");
+				break;
+				
 			default:
 				printf("<%d>",loop);
 				break;
 			}
 		}
+
 		flags >>= 1;
 	}
+
 	if(first) printf("[]");
 	else printf("]");
 }
