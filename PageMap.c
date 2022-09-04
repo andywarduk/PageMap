@@ -813,40 +813,54 @@ void flushnp(struct global *globals, uint64_t *npstart, uint64_t offset, bool sk
 
 #define MAX_CMDLINE 200
 
-void printcmdline(uint64_t pid, int width)
+void tidy_buf(char *buf, int b)
+{
+	char *ch;
+	int loop;
+
+	buf[b - 1] = '\x0';
+	for (ch = buf, loop = 0; loop < b - 1; loop++, ch++) {
+		if (*ch == '\x0') *ch = ' ';
+		else if (!isprint(*ch)) *ch = '.';
+	}
+}
+
+bool cmdlinefrom(uint64_t pid, const char* file, char* buf, int width)
 {
 	bool ok = false;
 	int hcmdline;
 	char path[PATH_MAX];
-	char *buf;
-	char *ch;
 	int b;
-	int loop;
-	
-	if (width == 0) width = MAX_CMDLINE;
-	buf = (char *) malloc(width);
 
-	sprintf(path, "/proc/%" UINT64FMT "u/cmdline", pid);
+	sprintf(path, "/proc/%" UINT64FMT "u/%s", pid, file);
 	hcmdline = open(path, O_RDONLY);
 
 	if (hcmdline >= 0) {
-		do {
-			b = read(hcmdline, buf, width);
-			if (b <= 0) break;
+		b = read(hcmdline, buf, width);
 
-			buf[b - 1] = '\x0';
-			for (ch = buf, loop = 0; loop < b - 1; loop++, ch++) {
-				if (*ch == '\x0') *ch = ' ';
-				else if (!isprint(*ch)) *ch = '.';
-			}
-			printf("%s", buf);
+		if (b > 0) {
+			tidy_buf(buf, b);
 			ok = true;
-		} while(0);
+		}
 
 		close(hcmdline);
 	}
 
-	if (!ok) {
+	return ok;
+}
+
+void printcmdline(uint64_t pid, int width)
+{
+	char *buf;
+	
+	if (width == 0) width = MAX_CMDLINE;
+	buf = (char *) malloc(width);
+
+	if (cmdlinefrom(pid, "cmdline", buf, width)) {
+		printf("%s", buf);
+	} else if (cmdlinefrom(pid, "comm", buf, width)) {
+		printf("[%s]", buf);
+	} else {
 		printf("<Unknown>");
 	}
 
