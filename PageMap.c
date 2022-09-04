@@ -40,6 +40,7 @@ struct sstats{
 	uint64_t anon;
 	uint64_t refd;
 	uint64_t swapped;
+	uint64_t huge;
 };
 
 #if __WORDSIZE == 64
@@ -70,29 +71,33 @@ int main(int argc, char **argv)
 	initialise(&globals);
 
 	// Parse arguments
-	while((opt = getopt(argc, argv, "vmswp:")) != -1){
+	while ((opt = getopt(argc, argv, "vmswp:")) != -1){
 		switch (opt) {
 		case 'v':
 			globals.verbose = true;
 			break;
+
 		case 'm':
 			globals.map = true;
 			break;
+
 		case 's':
 			globals.summary = true;
 			break;
+
 		case 'w':
 			globals.writable = true;
 			break;
+
 		case 'p':
-			if(globals.pid != 0){
+			if (globals.pid != 0) {
 				usage();
 				return 5;
 			}
-			if(strcmp(optarg, "self") == 0){
+
+			if (strcmp(optarg, "self") == 0) {
 				globals.pid = getpid();
-			}
-			else{
+			} else {
 				// Get pid
 				errno = 0;
 				globals.pid = strtoull(optarg, &end, 10);
@@ -101,29 +106,31 @@ int main(int argc, char **argv)
 					return 3;
 				}
 			}
+
 			break;
+
 		default:
 			usage(); 
 			return 1;
+
 		}
 	}
 
-	if(optind != argc){
+	if (optind != argc){
 		usage();
 		return 2;
 	}
 
-	if(globals.pid != 0){
-		if(globals.verbose && globals.map) return 4;
-	}
-	else{
-		if(globals.verbose || globals.map || globals.summary || globals.writable){
+	if (globals.pid != 0) {
+		if (globals.verbose && globals.map) return 4;
+	} else{
+		if (globals.verbose || globals.map || globals.summary || globals.writable) {
 			usage();
 			return 6;
 		}
 	}
 	
-	if(globals.pid)
+	if (globals.pid)
 		result = dumppid(&globals);
 	else
 		result = dumpall(&globals);
@@ -150,12 +157,11 @@ int initialise(struct global *globals)
 	globals->hkpageflags = open("/proc/kpageflags", O_RDONLY);
 
 	// Get terminal dimensions
-	if(ioctl(fileno(stdin), TIOCGWINSZ, &window_size) == 0){
+	if (ioctl(fileno(stdin), TIOCGWINSZ, &window_size) == 0){
 		globals->terminal = true;
 		globals->termwidth = (int) window_size.ws_col;
 		globals->termheight = (int) window_size.ws_row;
-	}
-	else{
+	} else{
 		globals->terminal = false;
 		globals->termwidth = 0;
 		globals->termheight = 0;
@@ -166,8 +172,8 @@ int initialise(struct global *globals)
 
 void cleanup(struct global *globals)
 {
-	if(globals->hkpagecount >= 0) close(globals->hkpagecount);
-	if(globals->hkpageflags >= 0) close(globals->hkpageflags);
+	if (globals->hkpagecount >= 0) close(globals->hkpagecount);
+	if (globals->hkpageflags >= 0) close(globals->hkpageflags);
 }
 
 int dumpall_filter(const struct dirent *entry)
@@ -175,14 +181,13 @@ int dumpall_filter(const struct dirent *entry)
 	int result = 1;
 	const char *ch;
 	
-	if(entry->d_type != DT_DIR){
+	if (entry->d_type != DT_DIR) {
 		result = 0;
-	}
-	else{
+	} else{
 		result = 0;
-		for(ch = entry->d_name; *ch != '\x0'; ch++){
+		for (ch = entry->d_name; *ch != '\x0'; ch++) {
 			if(isdigit(*ch)) result = 1;
-			else{
+			else {
 				result = 0;
 				break;
 			}
@@ -199,8 +204,10 @@ int dumpall_cmp(const struct dirent **one, const struct dirent **two)
 	
 	pidone = strtoull((*one)->d_name, NULL, 10);
 	pidtwo = strtoull((*two)->d_name, NULL, 10);
-	if(pidone < pidtwo) return -1;
-	if(pidone == pidtwo) return 0;
+	
+	if (pidone < pidtwo) return -1;
+	if (pidone == pidtwo) return 0;
+	
 	return 1;
 }
 
@@ -215,50 +222,55 @@ int dumpall(struct global *globals)
 	int statwidth;
 	int procwidth;
 	
-	statwidth = 10+1+8+1+8;
-	if(globals->hkpagecount >= 0) statwidth += 1+8+1+8;
-	if(globals->hkpageflags >= 0) statwidth += 1+8+1+8;
-	statwidth += 1+8+1;
+	statwidth = 10 + (2 * (1 + 8));
+	if (globals->hkpagecount >= 0) statwidth += 2 * (1 + 8);
+	if (globals->hkpageflags >= 0) statwidth += 3 * (1 + 8);
+	statwidth += 1 + 8 + 1;
 	
-	if(globals->terminal){
+	if(globals->terminal) {
 		procwidth = globals->termwidth - statwidth;
-		if(procwidth < 10) procwidth = 0;
-	}
-	else{
+		if (procwidth < 10) procwidth = 0;
+	} else {
 		procwidth = 0;
 	}
 	
 	globals->list = true;
 	do{
 		nent = scandir("/proc", &entries, dumpall_filter, dumpall_cmp);
-		if(nent < 0){
+		if (nent < 0) {
 			printf("Error scanning /proc\n");
 			result = 20;
 			break;	
 		}
 
-		for(loop=0; loop<nent; loop++){
-			if(needhdg){
-				//      xxxxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx....
+		for (loop = 0; loop < nent; loop++) {
+			if (needhdg) {
 				printf("====== PID     Size  Present");
-				if(globals->hkpagecount >= 0){
+
+				if (globals->hkpagecount >= 0) {
 					printf("  Private  Average");
 				}
-				if(globals->hkpageflags >= 0){
-					printf("     Anon    Ref'd");
+
+				if (globals->hkpageflags >= 0) {
+					printf("     Anon    Ref'd     Huge");
 				}
+
 				printf("  Swapped Process ======\n");
 				needhdg = false;
 			}
+
 			globals->pid = strtoull(entries[loop]->d_name, NULL, 10);
-			if(globals->pid > 0 && dumppid(globals) == 0){
+
+			if (globals->pid > 0 && dumppid(globals) == 0) {
 				printf(" ");
 				printcmdline(globals->pid, procwidth);
 				printf("\n");
-				if(++printed % 40 == 0) needhdg = true;
+				if (globals->terminal && globals->termheight > 2 && ++printed % (globals->termheight - 1) == 0) needhdg = true;
 			}
+
 			free(entries[loop]);
-		}	
+		}
+
 		free(entries);
 	} while(0);
 	
@@ -277,6 +289,7 @@ int dumppid(struct global *globals)
 	size_t linesize;
 	int linelen;
 	uint64_t range[2];
+	uint64_t size;
 	const char *item;
 	char *perms;
 
@@ -288,28 +301,27 @@ int dumppid(struct global *globals)
 	uint64_t pfn;
 	uint64_t swapfile;
 	uint64_t swapoff;
-	int present,swapped;
-	unsigned int shift;
-	unsigned int pagesize;
+	int present, swapped;
+	unsigned int pagesize = getpagesize();
 
 	uint64_t pagecnt;
 	uint64_t pageflags;
 	
 	struct sstats stats;
 
-	int gotpagecnt;
-	int gotpageflags;
+	bool gotpagecnt;
+	bool gotpageflags;
 
-	int incompound = 0;
-	int hdgotpagecnt = 0;
+	bool incompound = false;
+	bool hdgotpagecnt = false;
 	uint64_t hdpagecnt = 0;
-	uint64_t hdpageflags = 0	;
+	uint64_t hdpageflags = 0;
 
 	do{	
 		// Open page mapping
 		sprintf(path, "/proc/%" UINT64FMT "u/pagemap", globals->pid);
 		hpagemap = open(path, O_RDONLY);
-		if(hpagemap == -1){
+		if (hpagemap == -1) {
 			if(!globals->list){
 				printf("Error opening %s\n", path);
 			}
@@ -320,7 +332,7 @@ int dumppid(struct global *globals)
 		// Open maps
 		sprintf(path, "/proc/%" UINT64FMT "u/maps", globals->pid);
 		hmaps = fopen(path, "r");
-		if(hmaps == NULL){
+		if (hmaps == NULL) {
 			if(!globals->list){
 				printf("Error opening %s\n", path);
 			}
@@ -337,159 +349,183 @@ int dumppid(struct global *globals)
 
 		line = NULL;
 		linesize = 0;
-		while(1){
-			if(getline(&line, &linesize, hmaps) == -1) break;
+		while (1){
+			if (getline(&line, &linesize, hmaps) == -1) break;
 			linelen = strlen(line);
 
 			// Convert 0x0a to null
 			line[--linelen] = '\x0';
-			if(linelen > 74) item = line + 73;
+			if (linelen > 74) item = line + 73;
 			else item = "[Anonymous]";
 
 			// Get range start
 			errno = 0;
 			range[0] = strtoull(line, &end, 16);
-			if(errno != 0) continue;
+			if (errno != 0) continue;
 
 			// Get range end
 			++end;
 			errno = 0;
 			range[1] = strtoull(end, &end, 16);
-			if(errno != 0) continue;
+			if (errno != 0) continue;
+
+			// Calculate size
+			size = range[1] - range[0];
 
 			// Get perms
 			perms = ++end;
 			end = strchr(perms, ' ');
 			*end = '\x0';
 
-			if(globals->writable && strchr(perms, 'w')==NULL) skip = true;
+			if (globals->writable && strchr(perms, 'w') == NULL) skip = true;
 			else skip = false;
 
-			if((globals->verbose || globals->summary || globals->map) && !skip){
+			if ((globals->verbose || globals->summary || globals->map) && !skip) {
 				// Print section header
 				printf("==================== %s [%s] ", item, perms);
-				printsize(range[1]-range[0]);
+				printsize(size);
 				printf(" ====================\n");	
 			}
-			stats.size += range[1]-range[0];
-			
-			lseek64(hpagemap, (range[0]/4096)*sizeof(uint64_t), SEEK_SET);
+			stats.size += size;
+
+			lseek64(hpagemap, (range[0] / pagesize) * sizeof(uint64_t), SEEK_SET);
 			offset = range[0];
 			npstart = UINT64_MAX;
-			while(offset<range[1]){
+			while (offset < range[1]){
 				b = read(hpagemap, &entry, sizeof(uint64_t));
-				if(b <= 0) break;
+				if (b <= 0) break;
 
 				// Unpack common bits
 				present = (entry & 0x8000000000000000LL) >> 62;
 				swapped = (entry & 0x4000000000000000LL) >> 61;
-				shift = (entry & 0x1f80000000000000LL) >> 55;
-				pagesize = (1<<shift);
 				
-				if(!present && !swapped){
+				if (!present && !swapped) {
 					// Page not present in physical ram or swap
-					if(shift == 0) pagesize = 4096;
 					if(npstart == UINT64_MAX) npstart = offset;
 					if(globals->map && !skip) printf(".");
-				}
-				else{
+
+				} else {
 					// Page is in physical ram or swap
 					flushnp(globals, &npstart, offset, skip);
 
-					if(globals->verbose && !skip){
-						// Print page range
-						printf("   %016" UINT64FMT "x-%016" UINT64FMT "x ", offset, offset+pagesize-1);
-						printsize(pagesize);
+					if (globals->verbose && !skip) {
+						// Print page address
+						printf("   %016" UINT64FMT "x-%016" UINT64FMT "x", offset, offset + pagesize - 1);
 					}
-					if(present){
+
+					if (present) {
 						// Page is present in RAM
 						stats.present += pagesize;
 						
 						// Get PFN
 						pfn = entry & 0x007fffffffffffffLL;
-						if(globals->verbose && !skip){
+
+						if (globals->verbose && !skip) {
+							// Print PFN
 							printf(", Present (pfn %016" UINT64FMT "x)", pfn);
 						}
+
+						// Print present marker
 						if(globals->map && !skip) printf("P");
 
-						gotpagecnt = 0;
-						if(globals->hkpagecount >= 0){
+						gotpagecnt = false;
+						if (globals->hkpagecount >= 0) {
 							// Get page reference count if we can
-							lseek64(globals->hkpagecount, pfn*sizeof(uint64_t), SEEK_SET);						
+							lseek64(globals->hkpagecount, pfn * sizeof(uint64_t), SEEK_SET);						
 							b = read(globals->hkpagecount, &pagecnt, sizeof(uint64_t));
-							if(b == sizeof(uint64_t)){
-								gotpagecnt = 1;
+							if (b == sizeof(uint64_t)){
+								gotpagecnt = true;
 							}
 						}
 
-						gotpageflags = 0;
-						if(globals->hkpageflags >= 0){
+						gotpageflags = false;
+						if (globals->hkpageflags >= 0) {
 							// Get page flags if we can
-							lseek64(globals->hkpageflags, pfn*sizeof(uint64_t), SEEK_SET);						
+							lseek64(globals->hkpageflags, pfn * sizeof(uint64_t), SEEK_SET);						
 							b = read(globals->hkpageflags, &pageflags, sizeof(uint64_t));
-							if(b == sizeof(uint64_t)){
-								gotpageflags = 1;
+							if (b == sizeof(uint64_t)){
+								gotpageflags = true;
 							}
 						}
 
-						if(gotpageflags){
-							if(pageflags & (1<<15)){ // Compound head
-								incompound = 1;
+						if (gotpageflags) {
+							if (pageflags & (1 << 15)) {
+								// Compound head
+								incompound = true;
 								hdpageflags = pageflags;
 								hdgotpagecnt = gotpagecnt;
 								hdpagecnt = pagecnt;
-							}
-							else if(incompound && pageflags & (1<<16)){ // Compound tail
-								// Use hdpageflags from header
-							}
-							else { // Not compound
-								incompound = 0;
+
+							} else if(incompound && pageflags & (1 << 16)){
+								// Compound tail, use hdpageflags from header
+
+							} else {
+								// Not compound
+								incompound = false;
 								hdpageflags = pageflags;
 								hdgotpagecnt = gotpagecnt;
 								hdpagecnt = pagecnt;
+
 							}
-						}
-						else {
-							incompound = 0;
+
+						} else {
+							// Page flags not available
+							incompound = false;
 							hdgotpagecnt = gotpagecnt;
 							hdpagecnt = pagecnt;
+
 						}
 
-						if(gotpagecnt){
-							if(globals->verbose && !skip){
+						if (gotpagecnt) {
+							if (globals->verbose && !skip) {
+								// Print reference count
 								printf(", RefCnt %" UINT64FMT "u", pagecnt);
 							}
-							if(hdgotpagecnt){
-								if(hdpagecnt <= 1) stats.priv += pagesize;
-								if(hdpagecnt >= 1) stats.privavg += (pagesize<<8) / hdpagecnt;
+
+							if (hdgotpagecnt) {
+								// Accumulate private stats
+								if (hdpagecnt <= 1) stats.priv += pagesize;
+								if (hdpagecnt >= 1) stats.privavg += (pagesize << 8) / hdpagecnt;
 							}
 						}
 
-						if(gotpageflags){
-							if(globals->verbose && !skip){
+						if (gotpageflags) {
+							if (globals->verbose && !skip) {
+								// Print page flags
 								printf(", Flags ");
 								dumpflags(pageflags);
 							}
-							if(hdpageflags & (1<<12)) stats.anon += pagesize;
-							if(hdpageflags & (1<< 2)) stats.refd += pagesize;
+
+							// Accumulate anonymous memory
+							if(hdpageflags & (1 << 12)) stats.anon += pagesize;
+
+							// Accumulate referenced memory
+							if(hdpageflags & (1 << 2)) stats.refd += pagesize;
+
+							// Accumulate huge pages
+							if(hdpageflags & (1 << 17 | 1 << 22)) stats.huge += pagesize;
 						}
 
 					}
 
-					if(swapped){
+					if (swapped) {
 						// Page is in swap space
-						if(!present){
+						if (!present) {
 							stats.swapped += pagesize;
 							if(globals->map && !skip) printf("S");
 						}
+
+						// Unpack sap file and offset
 						swapfile = entry & 0x000000000000001fLL;
 						swapoff = (entry & 0x007fffffffffffe0LL) >> 5;
-						if(globals->verbose && !skip){
+
+						if(globals->verbose && !skip) {
+							// Print swap details
 							printf(", Swapped (seg %u offs %016" UINT64FMT "x)", (unsigned int) swapfile, swapoff);
 						}
 					}
 					
-					if(globals->verbose && !skip){
+					if (globals->verbose && !skip) {
 						printf("\n");
 					}
 				}
@@ -497,54 +533,69 @@ int dumppid(struct global *globals)
 				// Move to next page
 				offset+=pagesize;
 			}
+
+			// Write not present range
 			flushnp(globals, &npstart, offset, skip);
 
-			if(globals->map && !skip) printf("\n");			
-			if(globals->summary){
+			if (globals->map && !skip) printf("\n");
+
+			if (globals->summary) {
+				// Print summary details
 				if(skip) clearstats(&stats);
 				else dumpstats(globals, &stats);
 			}
 		}
-		if(line) free(line);
 
-		if(!globals->summary && !globals->map){
-			if(!globals->list){
+		if (line) free(line);
+
+		if (!globals->summary && !globals->map) {
+			if (!globals->list) {
 				printf("============ Totals ============\n");
 			}
+
+			// Print totals
 			dumpstats(globals, &stats);
 		}
 	} while(0);
 
-	if(hpagemap >= 0) close(hpagemap);
-	if(hmaps != NULL) fclose(hmaps);
+	if (hpagemap >= 0) close(hpagemap);
+	if (hmaps != NULL) fclose(hmaps);
 		
 	return result;
 }
 
 void dumpstats(struct global *globals, struct sstats *stats)
 {
-	if(globals->list){
+	if (globals->list) {
 		printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->size / 1024, stats->present / 1024);
-		if(globals->hkpagecount >= 0){
-			printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->priv / 1024, (stats->privavg>>8) / 1024);
+		
+		if (globals->hkpagecount >= 0) {
+			printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->priv / 1024, (stats->privavg >> 8) / 1024);
 		}
-		if(globals->hkpageflags >= 0){
-			printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->anon / 1024, stats->refd / 1024);
+		
+		if (globals->hkpageflags >= 0) {
+			printf(" %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u", stats->anon / 1024, stats->refd / 1024, stats->huge / 1024);
 		}
+		
 		printf(" %8" UINT64FMT "u", stats->swapped / 1024);
-	}
-	else{
+
+	} else{
 		printf("Size:       %8" UINT64FMT "u kB\n", stats->size / 1024);
-		printf("Present:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->present / 1024, ((double)stats->present/(double)stats->size)*100.0);
-		if(globals->hkpagecount >= 0 && stats->present){
-		printf("  Unique:   %8" UINT64FMT "u kB (%.1f%%)\n", stats->priv / 1024, ((double)stats->priv/(double)stats->present)*100.0);
-		printf("  Average:  %8" UINT64FMT "u kB (%.1f%%)\n", (stats->privavg>>8) / 1024, ((double)(stats->privavg>>8)/(double)stats->present)*100.0);
+		printf("Present:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->present / 1024, ((double) stats->present / (double) stats->size) * 100.0);
+		
+		if (globals->hkpagecount >= 0 && stats->present) {
+			printf("  Unique:   %8" UINT64FMT "u kB (%.1f%%)\n", stats->priv / 1024, ((double) stats->priv / (double) stats->present) * 100.0);
+			printf("  Average:  %8" UINT64FMT "u kB (%.1f%%)\n", (stats->privavg >> 8) / 1024, ((double) (stats->privavg >> 8) / (double) stats->present) * 100.0);
 		}
-		if(globals->hkpageflags >= 0 && stats->present){
-		printf("  Anon:     %8" UINT64FMT "u kB (%.1f%%)\n", stats->anon / 1024, ((double)stats->anon/(double)stats->present)*100.0);
-		printf("Referenced: %8" UINT64FMT "u kB (%.1f%%)\n", stats->refd / 1024, ((double)stats->refd/(double)stats->size)*100.0);	
+		
+		if (globals->hkpageflags >= 0 && stats->present) {
+			printf("  Anon:     %8" UINT64FMT "u kB (%.1f%%)\n", stats->anon / 1024, ((double) stats->anon / (double) stats->present) * 100.0);
+			printf("  Huge:     %8" UINT64FMT "u kB (%.1f%%)\n", stats->huge / 1024, ((double) stats->huge / (double) stats->present) * 100.0);
+			printf("Referenced: %8" UINT64FMT "u kB (%.1f%%)\n", stats->refd / 1024, ((double) stats->refd / (double) stats->size) * 100.0);
 		}
-		printf("Swapped:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->swapped / 1024, ((double)stats->swapped/(double)stats->size)*100.0);	
+		
+		printf("Swapped:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->swapped / 1024, ((double) stats->swapped / (double) stats->size) * 100.0);
+
 	}
 	
 	clearstats(stats);
@@ -559,6 +610,7 @@ void clearstats(struct sstats *stats)
 	stats->anon = 0;
 	stats->refd = 0;
 	stats->swapped = 0;
+	stats->huge = 0;
 }
 
 void usage()
@@ -576,10 +628,11 @@ void printsize(uint64_t size)
 	int mult = 0;
 	const char *unit;
 	
-	while(size > (mult == 0 ? 1024 : 8192)){
+	while (size > (mult == 0 ? 1024 : 8192)) {
 		size /= 1024;
 		++mult;	
 	}
+
 	switch(mult){
 	case 0:
 		unit="B";
@@ -615,18 +668,17 @@ void dumpflags(uint64_t flags)
 	int loop;
 	int first=1;
 	
-	for(loop=0; loop<64; loop++){
-		if(flags & 1){
+	for (loop = 0; loop < 64; loop++) {
+		if (flags & 1) {
 			if(first){
 				printf("[");
-				first=0;
-			}
-			else{
+				first = 0;
+			} else{
 				printf(" ");
 			}
 			
 			switch(loop){
-			// Take from Linux/include/uapi/linux/kernel-page-flags.h:
+			// Taken from Linux/include/uapi/linux/kernel-page-flags.h:
 			case 0:
 				printf("LOCKED");
 				break;
@@ -741,18 +793,20 @@ void dumpflags(uint64_t flags)
 		flags >>= 1;
 	}
 
-	if(first) printf("[]");
+	if (first) printf("[]");
 	else printf("]");
 }
 
 void flushnp(struct global *globals, uint64_t *npstart, uint64_t offset, bool skip)
 {
-	if(*npstart != UINT64_MAX){
-		if(globals->verbose && !skip){
-			printf("   %016" UINT64FMT "x-%016" UINT64FMT "x ", *npstart, offset-1);
-			printsize(offset-*npstart);
-			printf(", Not present\n");
+	if (*npstart != UINT64_MAX) {
+		if (globals->verbose && !skip) {
+			printf("   %016" UINT64FMT "x-%016" UINT64FMT "x", *npstart, offset - 1);
+			printf(", Not present ");
+			printsize(offset - *npstart);
+			printf("\n");
 		}
+
 		*npstart = UINT64_MAX;
 	}
 }
@@ -769,28 +823,32 @@ void printcmdline(uint64_t pid, int width)
 	int b;
 	int loop;
 	
-	if(width == 0) width = MAX_CMDLINE;
+	if (width == 0) width = MAX_CMDLINE;
 	buf = (char *) malloc(width);
 
 	sprintf(path, "/proc/%" UINT64FMT "u/cmdline", pid);
 	hcmdline = open(path, O_RDONLY);
-	if(hcmdline>=0){
-		do{
+
+	if (hcmdline >= 0) {
+		do {
 			b = read(hcmdline, buf, width);
-			if(b <= 0) break;
-			buf[b-1] = '\x0';
-			for(ch=buf, loop=0; loop<b-1; loop++, ch++){
-				if(*ch == '\x0') *ch = ' ';
-				else if(!isprint(*ch)) *ch = '.';
+			if (b <= 0) break;
+
+			buf[b - 1] = '\x0';
+			for (ch = buf, loop = 0; loop < b - 1; loop++, ch++) {
+				if (*ch == '\x0') *ch = ' ';
+				else if (!isprint(*ch)) *ch = '.';
 			}
 			printf("%s", buf);
-			ok=true;		
-		} while(0);	
+			ok = true;
+		} while(0);
+
 		close(hcmdline);
 	}
-	if(!ok){
+
+	if (!ok) {
 		printf("<Unknown>");
 	}
+
 	free(buf);
 }
-
