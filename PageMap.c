@@ -603,12 +603,6 @@ int dumppid(struct global *globals)
 							}
 						}
 
-						// Print present marker
-						if(globals->map && !skip) {
-							if (swapped) printf("B");
-							else printf("P");
-						}
-
 						gotpagecnt = false;
 						if (globals->hkpagecount >= 0) {
 							// Get page reference count if we can
@@ -627,6 +621,13 @@ int dumppid(struct global *globals)
 							if (b == sizeof(uint64_t)){
 								gotpageflags = true;
 							}
+						}
+
+						// Print present marker
+						if(globals->map && !skip) {
+							// If swapped or SWAPCACHE print 'B'
+							if (swapped || (gotpageflags && (pageflags & (1 << 13)))) printf("B");
+							else printf("P");
 						}
 
 						if (gotpageflags) {
@@ -696,7 +697,7 @@ int dumppid(struct global *globals)
 							if(globals->map && !skip) printf("S");
 						}
 
-						// Unpack sap file and offset
+						// Unpack swap file and offset
 						swapfile = entry & 0x000000000000001fLL;
 						swapoff = (entry & 0x007fffffffffffe0LL) >> 5;
 
