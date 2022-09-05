@@ -16,6 +16,15 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 
+#define RET_OK 0
+#define RET_HELP 1
+#define RET_2PROCS 2
+#define RET_BADPID 3
+#define RET_ARGREQ 4
+#define RET_BADARG 5
+#define RET_BADARGCOMB 6
+#define RET_PROCSCAN 7
+
 struct global{
 	int hkpagecount;
 	int hkpageflags;
@@ -30,6 +39,9 @@ struct global{
 	bool writable;
 	bool list;
 	uint64_t pid;
+	uint64_t last_pid;
+	uint64_t tid;
+	bool threads;
 };
 
 struct sstats{
@@ -43,7 +55,9 @@ struct sstats{
 	uint64_t huge;
 };
 
-int initialise(struct global *globals);
+int parse_args(struct global *globals, int argc, char **argv);
+bool parse_pid(struct global *globals, char *string);
+void initialise(struct global *globals);
 void cleanup(struct global *globals);
 void usage();
 void printsize(uint64_t size);
@@ -51,92 +65,178 @@ void dumpflags(uint64_t flags);
 void flushnp(struct global *globals, uint64_t *npstart, uint64_t offset, bool skip);
 int dumppid(struct global *globals);
 int dumpall(struct global *globals);
+void dumpall_pid(struct global *globals, uint64_t pid, uint64_t tid, int *printed, bool *needhdg, int procwidth);
+int dumpall_pid_threads(struct global *globals, uint64_t pid, int *printed, bool *needhdg, int procwidth);
 void dumpstats(struct global *globals, struct sstats *stats);
 void clearstats(struct sstats *stats);
 void printcmdline(uint64_t pid, int width);
 
 int main(int argc, char **argv)
 {
-	int opt;
 	struct global globals;
-	char *end;
-	int result = 0;
+	int result;
 
+	// Initialise globals
 	initialise(&globals);
 
-	// Parse arguments
-	while ((opt = getopt(argc, argv, "vmswp:")) != -1){
-		switch (opt) {
-		case 'v':
-			globals.verbose = true;
-			break;
+	// Parse command line arguments
+	result = parse_args(&globals, argc, argv);
 
-		case 'm':
-			globals.map = true;
-			break;
-
-		case 's':
-			globals.summary = true;
-			break;
-
-		case 'w':
-			globals.writable = true;
-			break;
-
-		case 'p':
-			if (globals.pid != 0) {
-				usage();
-				return 5;
-			}
-
-			if (strcmp(optarg, "self") == 0) {
-				globals.pid = getpid();
-			} else {
-				// Get pid
-				errno = 0;
-				globals.pid = strtoull(optarg, &end, 10);
-				if(errno != 0 || *end != '\x0'){
-					usage();
-					return 3;
-				}
-			}
-
-			break;
-
-		default:
-			usage(); 
-			return 1;
-
-		}
-	}
-
-	if (optind != argc){
+	if (result != RET_OK) {
 		usage();
-		return 2;
+		return result;
 	}
 
-	if (globals.pid != 0) {
-		if (globals.verbose && globals.map) return 4;
-	} else{
-		if (globals.verbose || globals.map || globals.summary || globals.writable) {
-			usage();
-			return 6;
-		}
-	}
-	
-	if (globals.pid)
+	// Main process
+	if (globals.pid && !globals.threads) {
 		result = dumppid(&globals);
-	else
+	} else {
 		result = dumpall(&globals);
+	}
 
+	// Clean up globals
 	cleanup(&globals);
 	
 	return result;
 }
 
-int initialise(struct global *globals)
+int parse_args(struct global *globals, int argc, char **argv)
 {
-	int result = 0;
+	int opt;
+
+	// Parse arguments
+	while ((opt = getopt(argc, argv, ":hvmswp:t:")) != -1){
+		switch (opt) {
+		case 'h':
+			return RET_HELP;
+
+		case 'v':
+			globals->verbose = true;
+			break;
+
+		case 'm':
+			globals->map = true;
+			break;
+
+		case 's':
+			globals->summary = true;
+			break;
+
+		case 'w':
+			globals->writable = true;
+			break;
+
+		case 'p':
+			if (globals->pid != 0) {
+				fprintf(stderr, "Error: Process ID can only be specified once\n");
+				return RET_2PROCS;
+			}
+
+			if (!parse_pid(globals, optarg)) {
+				fprintf(stderr, "Error: Invalid process / thread ID '%s'\n", optarg);
+				return RET_BADPID;
+			}
+
+			break;
+
+		case 't':
+			globals->threads = true;
+
+			if (globals->pid != 0) {
+				fprintf(stderr, "Error: Process ID can only be specified once\n");
+				return RET_2PROCS;
+			}
+
+			if (!parse_pid(globals, optarg)) {
+				fprintf(stderr, "Error: Invalid process ID '%s\n", optarg);
+				return RET_BADPID;
+			}
+
+			break;
+
+		case ':':
+			switch (optopt) {
+			case 't':
+				globals->threads = true;
+				break;
+
+			default:
+				fprintf(stderr, "Error: Argument for -%c is required\n", optopt);
+				return RET_ARGREQ;
+
+			}
+
+			break;
+
+		default:
+			fprintf(stderr, "Error: Unrecognised argument: %c\n", optopt);
+			return RET_BADARG;
+
+		}
+	}
+
+	if (optind != argc){
+		fprintf(stderr, "Error: Unrecognised argument: %s\n", argv[optind]);
+		return RET_BADARG;
+	}
+
+	if (globals->verbose || globals->map || globals->summary || globals->writable) {
+		if (globals->pid == 0 || globals->threads) {
+			fprintf(stderr, "Error: Options require a single PID specified with -p only\n");
+			return RET_BADARGCOMB;
+		}
+	}
+
+	if (globals->verbose && globals->map) {
+		fprintf(stderr, "Error: -v and -m can't be used together");
+		return RET_BADARGCOMB;
+	}
+
+	return RET_OK;
+}
+
+bool parse_pid(struct global *globals, char *string)
+{
+	if (strcmp(string, "self") == 0) {
+		// Use current pid
+		globals->pid = getpid();
+
+	} else {
+		// Get pid
+		char *end;
+
+		errno = 0;
+		globals->pid = strtoull(string, &end, 10);
+
+		if (errno != 0 || *end != '\x0') {
+			return false;
+		}
+
+	}
+
+	globals->tid = globals->pid;
+
+	return true;
+}
+
+void usage()
+{
+	printf("Usage: PageMap [-t [<pid>] | [-p <pid> [-v | -m] [-s] [-w]]]\n"
+	       "   where: -p <pid>    Process / thread ID to dump\n"
+	       "          -v          Dump each present / swapped page frame\n"
+	       "          -m          Dump status map of each mapped frame:\n"
+		   "                        'P' = present\n"
+		   "                        'S' = swapped\n"
+		   "                        'B' = present and swapped\n"
+		   "                        '.' = not present\n"
+	       "          -s          Print statistics for each mapped section\n"
+	       "          -w          Only process writable sections\n"
+	       "          -t [<pid>]  Display all threads for each process\n"
+		   "          -h          Show this help\n");
+}
+
+void initialise(struct global *globals)
+{
 	struct winsize window_size;
 
 	globals->verbose = false;
@@ -145,6 +245,9 @@ int initialise(struct global *globals)
 	globals->writable = false;
 	globals->list = false;
 	globals->pid = 0;
+	globals->last_pid = UINT64_MAX;
+	globals->tid = 0;
+	globals->threads = false;
 	
 	// Try and open kernel page stats
 	globals->hkpagecount = open("/proc/kpagecount", O_RDONLY);
@@ -160,8 +263,6 @@ int initialise(struct global *globals)
 		globals->termwidth = 0;
 		globals->termheight = 0;
 	}
-	
-	return result;
 }
 
 void cleanup(struct global *globals)
@@ -180,7 +281,7 @@ int dumpall_filter(const struct dirent *entry)
 	} else{
 		result = 0;
 		for (ch = entry->d_name; *ch != '\x0'; ch++) {
-			if(isdigit(*ch)) result = 1;
+			if (isdigit(*ch)) result = 1;
 			else {
 				result = 0;
 				break;
@@ -207,16 +308,15 @@ int dumpall_cmp(const struct dirent **one, const struct dirent **two)
 
 int dumpall(struct global *globals)
 {
-	int result;
-	struct dirent **entries;
-	int nent;
-	int loop;
+	int result = RET_OK;
 	bool needhdg = true;
 	int printed = 0;
 	int statwidth;
 	int procwidth;
 	
-	statwidth = 10 + (2 * (1 + 8));
+	statwidth = 10;
+	if (globals->threads) statwidth += 1 + 10;
+	statwidth += 2 * (1 + 8);
 	if (globals->hkpagecount >= 0) statwidth += 2 * (1 + 8);
 	if (globals->hkpageflags >= 0) statwidth += 3 * (1 + 8);
 	statwidth += 1 + 8 + 1;
@@ -229,47 +329,115 @@ int dumpall(struct global *globals)
 	}
 	
 	globals->list = true;
-	do{
+
+	if (globals->pid != 0) {
+		result = dumpall_pid_threads(globals, globals->pid, &printed, &needhdg, procwidth);
+
+	} else {
+		struct dirent **entries = NULL;
+		int nent;
+		int loop;
+
 		nent = scandir("/proc", &entries, dumpall_filter, dumpall_cmp);
+
 		if (nent < 0) {
+			// Failed to scan /proc
 			fprintf(stderr, "Error scanning /proc: ");
 			perror(NULL);
-			result = 20;
-			break;	
+			result = RET_PROCSCAN;
+
+		} else {
+			// Loop each entry in /proc
+			for (loop = 0; loop < nent; loop++) {
+				uint64_t pid = strtoull(entries[loop]->d_name, NULL, 10);
+
+				if (globals->threads) {
+					// Dump all threads for this PID
+					dumpall_pid_threads(globals, pid, &printed, &needhdg, procwidth);
+				} else {
+					// Just dump this PID
+					dumpall_pid(globals, pid, pid, &printed, &needhdg, procwidth);
+				}
+
+				free(entries[loop]);
+			}
+
 		}
 
+		if (entries != NULL) free(entries);
+	}
+
+	return result;
+}
+
+int dumpall_pid_threads(struct global *globals, uint64_t pid, int *printed, bool *needhdg, int procwidth)
+{
+	int result = RET_OK;
+	char path[PATH_MAX + 1];
+	struct dirent **entries = NULL;
+	int nent;
+	int loop;
+
+	sprintf(path, "/proc/%" PRIu64 "/task", pid);
+
+	nent = scandir(path, &entries, dumpall_filter, dumpall_cmp);
+
+	if (nent < 0) {
+		// Failed to scan /proc/n/task
+		fprintf(stderr, "Error scanning %s: ", path);
+		perror(NULL);
+		result = RET_PROCSCAN;
+
+	} else {
+		// Loop each entry in /proc/n/task
 		for (loop = 0; loop < nent; loop++) {
-			if (needhdg) {
-				printf("====== PID     Size  Present");
+			uint64_t tid = strtoull(entries[loop]->d_name, NULL, 10);
 
-				if (globals->hkpagecount >= 0) {
-					printf("  Private  Average");
-				}
-
-				if (globals->hkpageflags >= 0) {
-					printf("     Anon    Ref'd     Huge");
-				}
-
-				printf("  Swapped Process ======\n");
-				needhdg = false;
-			}
-
-			globals->pid = strtoull(entries[loop]->d_name, NULL, 10);
-
-			if (globals->pid > 0 && dumppid(globals) == 0) {
-				printf(" ");
-				printcmdline(globals->pid, procwidth);
-				printf("\n");
-				if (globals->terminal && globals->termheight > 2 && ++printed % (globals->termheight - 1) == 0) needhdg = true;
-			}
+			// Just dump this TID
+			dumpall_pid(globals, pid, tid, printed, needhdg, procwidth);
 
 			free(entries[loop]);
 		}
 
-		free(entries);
-	} while(0);
-	
+	}
+
+	if (entries != NULL) free(entries);
+
 	return result;
+}
+
+void dumpall_pid(struct global *globals, uint64_t pid, uint64_t tid, int *printed, bool *needhdg, int procwidth)
+{
+	if (*needhdg) {
+		printf("====== PID");
+		
+		if (globals->threads) {
+			printf("        TID");
+		}
+
+		printf("     Size  Present");
+
+		if (globals->hkpagecount >= 0) {
+			printf("  Private  Average");
+		}
+
+		if (globals->hkpageflags >= 0) {
+			printf("     Anon    Ref'd     Huge");
+		}
+
+		printf("  Swapped Process ======\n");
+		*needhdg = false;
+	}
+
+	globals->pid = pid;
+	globals->tid = tid;
+
+	if (tid > 0 && dumppid(globals) == 0) {
+		printf(" ");
+		printcmdline(globals->tid, procwidth);
+		printf("\n");
+		if (globals->terminal && globals->termheight > 2 && ++*printed % (globals->termheight - 1) == 0) *needhdg = true;
+	}
 }
 
 int dumppid(struct global *globals)
@@ -278,7 +446,7 @@ int dumppid(struct global *globals)
 	
 	bool skip;
 	char *end;
-	char path[PATH_MAX+1];
+	char path[PATH_MAX + 1];
 	FILE *hmaps = NULL;
 	char *line;
 	size_t linesize;
@@ -299,7 +467,7 @@ int dumppid(struct global *globals)
 	int present, swapped;
 	unsigned int pagesize = getpagesize();
 
-	uint64_t pagecnt;
+	uint64_t pagecnt = 0;
 	uint64_t pageflags;
 	
 	struct sstats stats;
@@ -314,7 +482,7 @@ int dumppid(struct global *globals)
 
 	do{	
 		// Open page mapping
-		sprintf(path, "/proc/%" PRIu64 "/pagemap", globals->pid);
+		sprintf(path, "/proc/%" PRIu64 "/pagemap", globals->tid);
 		hpagemap = open(path, O_RDONLY);
 		if (hpagemap == -1) {
 			if(!globals->list || errno != EACCES){
@@ -326,7 +494,7 @@ int dumppid(struct global *globals)
 		}
 
 		// Open maps
-		sprintf(path, "/proc/%" PRIu64 "/maps", globals->pid);
+		sprintf(path, "/proc/%" PRIu64 "/maps", globals->tid);
 		hmaps = fopen(path, "r");
 		if (hmaps == NULL) {
 			if(!globals->list){
@@ -340,8 +508,17 @@ int dumppid(struct global *globals)
 		// Clear stats
 		clearstats(&stats);
 
-		if(globals->list){
-			printf("%10" PRIu64, globals->pid);
+		if (globals->list) {
+			if (globals->pid != globals->last_pid) {
+				printf("%10" PRIu64, globals->pid);
+				globals->last_pid = globals->pid;
+			} else {
+				printf("          ");
+			}
+
+			if (globals->threads) {
+				printf(" %10" PRIu64, globals->tid);
+			}
 		}
 
 		line = NULL;
@@ -419,7 +596,11 @@ int dumppid(struct global *globals)
 
 						if (globals->verbose && !skip) {
 							// Print PFN
-							printf(", Present (pfn %016" PRIx64 ")", pfn);
+							printf(", Present");
+
+							if (pfn != 0) {
+								printf(" (pfn %016" PRIx64 ")", pfn);
+							}
 						}
 
 						// Print present marker
@@ -611,20 +792,6 @@ void clearstats(struct sstats *stats)
 	stats->refd = 0;
 	stats->swapped = 0;
 	stats->huge = 0;
-}
-
-void usage()
-{
-	printf("Usage: PageMap [-p <pid> [-v | -m] [-s] [-w]]\n"
-	       "   where: -p <pid>  Process ID to dump\n"
-	       "          -v        Dump each present / swapped page frame\n"
-	       "          -m        Dump status map of each mapped frame:\n"
-		   "                      'P' = present\n"
-		   "                      'S' = swapped\n"
-		   "                      'B' = present and swapped\n"
-		   "                      '.' = not present\n"
-	       "          -s        Print statistics for each mapped section\n"
-	       "          -w        Only process writable sections\n");
 }
 
 void printsize(uint64_t size)
@@ -833,7 +1000,7 @@ bool cmdlinefrom(uint64_t pid, const char* file, char* buf, int width)
 {
 	bool ok = false;
 	int hcmdline;
-	char path[PATH_MAX];
+	char path[PATH_MAX + 1];
 	int b;
 
 	sprintf(path, "/proc/%" PRIu64 "/%s", pid, file);
