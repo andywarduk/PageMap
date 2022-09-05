@@ -1,4 +1,7 @@
+PageMap
 PageMap32
+PageMapx32
 PageMap64
 *.o
 *~
+core*

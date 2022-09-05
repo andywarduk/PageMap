@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
-#include <stdint.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <string.h>
 #include <dirent.h>
@@ -42,12 +42,6 @@ struct sstats{
 	uint64_t swapped;
 	uint64_t huge;
 };
-
-#if __WORDSIZE == 64
-#define UINT64FMT "l"
-#else
-#define UINT64FMT "ll"
-#endif
 
 int initialise(struct global *globals);
 void cleanup(struct global *globals);
@@ -238,7 +232,8 @@ int dumpall(struct global *globals)
 	do{
 		nent = scandir("/proc", &entries, dumpall_filter, dumpall_cmp);
 		if (nent < 0) {
-			printf("Error scanning /proc\n");
+			fprintf(stderr, "Error scanning /proc: ");
+			perror(NULL);
 			result = 20;
 			break;	
 		}
@@ -319,22 +314,24 @@ int dumppid(struct global *globals)
 
 	do{	
 		// Open page mapping
-		sprintf(path, "/proc/%" UINT64FMT "u/pagemap", globals->pid);
+		sprintf(path, "/proc/%" PRIu64 "/pagemap", globals->pid);
 		hpagemap = open(path, O_RDONLY);
 		if (hpagemap == -1) {
-			if(!globals->list){
-				printf("Error opening %s\n", path);
+			if(!globals->list || errno != EACCES){
+				fprintf(stderr, "Error opening %s: ", path);
+				perror(NULL);
 			}
 			result = 10;
 			break;
 		}
 
 		// Open maps
-		sprintf(path, "/proc/%" UINT64FMT "u/maps", globals->pid);
+		sprintf(path, "/proc/%" PRIu64 "/maps", globals->pid);
 		hmaps = fopen(path, "r");
 		if (hmaps == NULL) {
 			if(!globals->list){
-				printf("Error opening %s\n", path);
+				fprintf(stderr, "Error opening %s: ", path);
+				perror(NULL);
 			}
 			result = 11;
 			break;
@@ -344,7 +341,7 @@ int dumppid(struct global *globals)
 		clearstats(&stats);
 
 		if(globals->list){
-			printf("%10" UINT64FMT "u", globals->pid);
+			printf("%10" PRIu64, globals->pid);
 		}
 
 		line = NULL;
@@ -410,7 +407,7 @@ int dumppid(struct global *globals)
 
 					if (globals->verbose && !skip) {
 						// Print page address
-						printf("   %016" UINT64FMT "x-%016" UINT64FMT "x", offset, offset + pagesize - 1);
+						printf("   %016" PRIx64 "-%016" PRIx64, offset, offset + pagesize - 1);
 					}
 
 					if (present) {
@@ -422,11 +419,14 @@ int dumppid(struct global *globals)
 
 						if (globals->verbose && !skip) {
 							// Print PFN
-							printf(", Present (pfn %016" UINT64FMT "x)", pfn);
+							printf(", Present (pfn %016" PRIx64 ")", pfn);
 						}
 
 						// Print present marker
-						if(globals->map && !skip) printf("P");
+						if(globals->map && !skip) {
+							if (swapped) printf("B");
+							else printf("P");
+						}
 
 						gotpagecnt = false;
 						if (globals->hkpagecount >= 0) {
@@ -479,7 +479,7 @@ int dumppid(struct global *globals)
 						if (gotpagecnt) {
 							if (globals->verbose && !skip) {
 								// Print reference count
-								printf(", RefCnt %" UINT64FMT "u", pagecnt);
+								printf(", RefCnt %" PRIu64, pagecnt);
 							}
 
 							if (hdgotpagecnt) {
@@ -521,7 +521,7 @@ int dumppid(struct global *globals)
 
 						if(globals->verbose && !skip) {
 							// Print swap details
-							printf(", Swapped (seg %u offs %016" UINT64FMT "x)", (unsigned int) swapfile, swapoff);
+							printf(", Swapped (seg %u offs %016" PRIx64 ")", (unsigned int) swapfile, swapoff);
 						}
 					}
 					
@@ -567,34 +567,34 @@ int dumppid(struct global *globals)
 void dumpstats(struct global *globals, struct sstats *stats)
 {
 	if (globals->list) {
-		printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->size / 1024, stats->present / 1024);
+		printf(" %8" PRIu64 " %8" PRIu64, stats->size / 1024, stats->present / 1024);
 		
 		if (globals->hkpagecount >= 0) {
-			printf(" %8" UINT64FMT "u %8" UINT64FMT "u", stats->priv / 1024, (stats->privavg >> 8) / 1024);
+			printf(" %8" PRIu64 " %8" PRIu64, stats->priv / 1024, (stats->privavg >> 8) / 1024);
 		}
 		
 		if (globals->hkpageflags >= 0) {
-			printf(" %8" UINT64FMT "u %8" UINT64FMT "u %8" UINT64FMT "u", stats->anon / 1024, stats->refd / 1024, stats->huge / 1024);
+			printf(" %8" PRIu64 " %8" PRIu64 " %8" PRIu64, stats->anon / 1024, stats->refd / 1024, stats->huge / 1024);
 		}
 		
-		printf(" %8" UINT64FMT "u", stats->swapped / 1024);
+		printf(" %8" PRIu64, stats->swapped / 1024);
 
 	} else{
-		printf("Size:       %8" UINT64FMT "u kB\n", stats->size / 1024);
-		printf("Present:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->present / 1024, ((double) stats->present / (double) stats->size) * 100.0);
+		printf("Size:       %8" PRIu64 " kB\n", stats->size / 1024);
+		printf("Present:    %8" PRIu64 " kB (%.1f%%)\n", stats->present / 1024, ((double) stats->present / (double) stats->size) * 100.0);
 		
 		if (globals->hkpagecount >= 0 && stats->present) {
-			printf("  Unique:   %8" UINT64FMT "u kB (%.1f%%)\n", stats->priv / 1024, ((double) stats->priv / (double) stats->present) * 100.0);
-			printf("  Average:  %8" UINT64FMT "u kB (%.1f%%)\n", (stats->privavg >> 8) / 1024, ((double) (stats->privavg >> 8) / (double) stats->present) * 100.0);
+			printf("  Unique:   %8" PRIu64 " kB (%.1f%%)\n", stats->priv / 1024, ((double) stats->priv / (double) stats->present) * 100.0);
+			printf("  Average:  %8" PRIu64 " kB (%.1f%%)\n", (stats->privavg >> 8) / 1024, ((double) (stats->privavg >> 8) / (double) stats->present) * 100.0);
 		}
 		
 		if (globals->hkpageflags >= 0 && stats->present) {
-			printf("  Anon:     %8" UINT64FMT "u kB (%.1f%%)\n", stats->anon / 1024, ((double) stats->anon / (double) stats->present) * 100.0);
-			printf("  Huge:     %8" UINT64FMT "u kB (%.1f%%)\n", stats->huge / 1024, ((double) stats->huge / (double) stats->present) * 100.0);
-			printf("Referenced: %8" UINT64FMT "u kB (%.1f%%)\n", stats->refd / 1024, ((double) stats->refd / (double) stats->size) * 100.0);
+			printf("  Anon:     %8" PRIu64 " kB (%.1f%%)\n", stats->anon / 1024, ((double) stats->anon / (double) stats->present) * 100.0);
+			printf("  Huge:     %8" PRIu64 " kB (%.1f%%)\n", stats->huge / 1024, ((double) stats->huge / (double) stats->present) * 100.0);
+			printf("Referenced: %8" PRIu64 " kB (%.1f%%)\n", stats->refd / 1024, ((double) stats->refd / (double) stats->size) * 100.0);
 		}
 		
-		printf("Swapped:    %8" UINT64FMT "u kB (%.1f%%)\n", stats->swapped / 1024, ((double) stats->swapped / (double) stats->size) * 100.0);
+		printf("Swapped:    %8" PRIu64 " kB (%.1f%%)\n", stats->swapped / 1024, ((double) stats->swapped / (double) stats->size) * 100.0);
 
 	}
 	
@@ -617,8 +617,12 @@ void usage()
 {
 	printf("Usage: PageMap [-p <pid> [-v | -m] [-s] [-w]]\n"
 	       "   where: -p <pid>  Process ID to dump\n"
-	       "          -v        Dump each present / swapped page entry\n"
-	       "          -m        Dump status map of each mapped segment ('P'resent, 'S'wapped or '.' for not present)\n"
+	       "          -v        Dump each present / swapped page frame\n"
+	       "          -m        Dump status map of each mapped frame:\n"
+		   "                      'P' = present\n"
+		   "                      'S' = swapped\n"
+		   "                      'B' = present and swapped\n"
+		   "                      '.' = not present\n"
 	       "          -s        Print statistics for each mapped section\n"
 	       "          -w        Only process writable sections\n");
 }
@@ -660,7 +664,7 @@ void printsize(uint64_t size)
 		break;
 	}
 	
-	printf("[%4" UINT64FMT "u%2s]",size,unit);
+	printf("[%4" PRIu64 " %2s]",size,unit);
 }
 
 void dumpflags(uint64_t flags)
@@ -801,7 +805,7 @@ void flushnp(struct global *globals, uint64_t *npstart, uint64_t offset, bool sk
 {
 	if (*npstart != UINT64_MAX) {
 		if (globals->verbose && !skip) {
-			printf("   %016" UINT64FMT "x-%016" UINT64FMT "x", *npstart, offset - 1);
+			printf("   %016" PRIx64 "-%016" PRIx64, *npstart, offset - 1);
 			printf(", Not present ");
 			printsize(offset - *npstart);
 			printf("\n");
@@ -832,7 +836,7 @@ bool cmdlinefrom(uint64_t pid, const char* file, char* buf, int width)
 	char path[PATH_MAX];
 	int b;
 
-	sprintf(path, "/proc/%" UINT64FMT "u/%s", pid, file);
+	sprintf(path, "/proc/%" PRIu64 "/%s", pid, file);
 	hcmdline = open(path, O_RDONLY);
 
 	if (hcmdline >= 0) {
