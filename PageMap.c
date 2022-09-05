@@ -254,7 +254,7 @@ void initialise(struct global *globals)
 	globals->hkpageflags = open("/proc/kpageflags", O_RDONLY);
 
 	// Get terminal dimensions
-	if (ioctl(fileno(stdin), TIOCGWINSZ, &window_size) == 0){
+	if (ioctl(fileno(stdout), TIOCGWINSZ, &window_size) == 0){
 		globals->terminal = true;
 		globals->termwidth = (int) window_size.ws_col;
 		globals->termheight = (int) window_size.ws_row;
